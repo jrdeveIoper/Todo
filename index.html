@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Daily To-Do List</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f4f6fb;--panel:#fff;--text:#172033;--muted:#6b7280;--line:#e5e7eb;--accent:#5b5ce2;--soft:#eeeeff;--danger:#dc3545}
+    @media(prefers-color-scheme:dark){:root{--bg:#111522;--panel:#1b2132;--text:#eef2ff;--muted:#a4aec2;--line:#30384b;--accent:#9293ff;--soft:#2b2d51;--danger:#ff6877}}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:28px 16px;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+    .app{max-width:680px;margin:auto}header{margin-bottom:22px}.eyebrow{color:var(--accent);font-weight:750;font-size:.78rem;letter-spacing:.12em;text-transform:uppercase}
+    h1{margin:5px 0 4px;font-size:clamp(1.8rem,5vw,2.5rem);line-height:1.15}#today,.muted{color:var(--muted)}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 8px 28px #0000000a}
+    form{display:flex;gap:9px;margin-bottom:18px}input[type=text]{min-width:0;flex:1;padding:12px 14px;border-radius:11px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+    button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:700;cursor:pointer}button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+    .add{background:var(--accent);color:#fff}.summary{display:flex;justify-content:space-between;gap:12px;margin:4px 0 12px;color:var(--muted);font-size:.92rem}
+    .progress{height:7px;background:var(--line);border-radius:99px;overflow:hidden;margin-bottom:17px}#progressFill{height:100%;width:0;background:var(--accent);transition:width .2s}
+    #tasks{list-style:none;margin:0;padding:0;display:grid;gap:9px}.task{display:flex;align-items:center;gap:11px;padding:12px;border:1px solid var(--line);border-radius:12px}
+    .task input{width:19px;height:19px;flex:0 0 auto;accent-color:var(--accent);cursor:pointer}.task-text{flex:1;min-width:0;overflow-wrap:anywhere}.task.done .task-text{color:var(--muted);text-decoration:line-through}
+    .delete{background:transparent;color:var(--danger);padding:6px 9px;font-size:1.1rem}.empty{padding:26px 10px;color:var(--muted);text-align:center}
+    .bottom{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px}.secondary{background:var(--soft);color:var(--accent)}.clear{background:transparent;color:var(--muted);padding-inline:8px}
+    #status{font-size:.9rem;margin:12px 2px 0;min-height:1.4em;color:var(--muted)}.note{color:var(--muted);font-size:.82rem;margin:15px 2px 0}
+    @media(max-width:420px){.panel{padding:14px}form{flex-wrap:wrap}form input{flex-basis:100%}form .add{width:100%}}
+  </style>
+</head>
+<body>
+<main class="app">
+  <header>
+    <div class="eyebrow">Your personal checklist</div>
+    <h1>My To-Do List</h1>
+    <div id="today"></div>
+  </header>
+  <section class="panel" aria-label="To-do checklist">
+    <form id="taskForm">
+      <input id="taskInput" type="text" maxlength="240" placeholder="What do you need to do?" autocomplete="off" required>
+      <button class="add" type="submit">+ Add task</button>
+    </form>
+    <div class="summary"><span id="count">Loading tasks…</span><span id="progressText">—</span></div>
+    <div class="progress" role="progressbar" aria-label="Tasks completed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressBar"><div id="progressFill"></div></div>
+    <ul id="tasks"></ul>
+    <div id="empty" class="empty" hidden>No tasks yet. Add your first task above ✨</div>
+    <div class="bottom">
+      <button id="refresh" class="secondary" type="button">↻ Refresh tasks</button>
+      <button id="clearDone" class="clear" type="button">Delete completed</button>
+    </div>
+    <div id="status" role="status" aria-live="polite">Connecting to your online checklist…</div>
+  </section>
+  <p class="note">Tasks are stored in your Google Sheet by date and can be shared across devices. No website login is required. Anyone who obtains the web-app URL may be able to access or change this checklist, so do not store private information.</p>
+</main>
+<script>
+  // STEP: Replace the placeholder below with your deployed Apps Script Web app URL.
+  const API_URL = "https://script.google.com/macros/s/AKfycbzbI5PvqwMzjqYjNcHeNiBeAL7kvZUJBW3hxbVFQhYxU2J_uTUGHU2-yF-ODhQFVsn5Lg/exec";
+  const tasksEl = document.getElementById("tasks");
+  const emptyEl = document.getElementById("empty");
+  const statusEl = document.getElementById("status");
+  const inputEl = document.getElementById("taskInput");
+  const state = { tasks: [], busy: false };
+
+  function dateKeyNow(){
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  }
+  function showDate(){
+    document.getElementById("today").textContent = new Intl.DateTimeFormat(undefined,{weekday:"long",year:"numeric",month:"long",day:"numeric"}).format(new Date());
+  }
+  function setStatus(message, error=false){
+    statusEl.textContent = message;
+    statusEl.style.color = error ? "var(--danger)" : "var(--muted)";
+  }
+  function api(action, params={}){
+    return new Promise((resolve,reject)=>{
+      if(!API_URL.startsWith("https://script.google.com/macros/s/") || API_URL.includes("PASTE_YOUR")){
+        reject(new Error("Pehle index.html mein apna Web app URL paste karo."));
+        return;
+      }
+      const callback = "todoCallback_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+      const query = new URLSearchParams({action, callback, ...params});
+      const script = document.createElement("script");
+      const timeout = setTimeout(()=>finish(new Error("Request timed out. Connection check karke refresh karo.")),20000);
+      function cleanup(){clearTimeout(timeout);script.remove();try{delete window[callback]}catch(e){window[callback]=undefined}}
+      function finish(err,data){cleanup();err?reject(err):resolve(data)}
+      window[callback] = data => {
+        if(!data || data.ok !== true) finish(new Error(data?.error || "Request failed."));
+        else finish(null,data);
+      };
+      script.onerror = ()=>finish(new Error("Google Apps Script se connect nahi hua. URL aur deployment check karo."));
+      script.src = API_URL + (API_URL.includes("?") ? "&" : "?") + query.toString();
+      document.body.appendChild(script);
+    });
+  }
+  function render(){
+    showDate();
+    tasksEl.replaceChildren();
+    const total=state.tasks.length, completed=state.tasks.filter(t=>t.done).length;
+    const percent=total?Math.round(completed/total*100):0;
+    for(const task of state.tasks){
+      const li=document.createElement("li"); li.className="task"+(task.done?" done":"");
+      const check=document.createElement("input"); check.type="checkbox"; check.checked=!!task.done;
+      check.setAttribute("aria-label",`Mark ${task.text} as ${task.done?"not complete":"complete"}`);
+      check.disabled=state.busy;
+      check.addEventListener("change",()=>mutate("toggle",{id:task.id,done:String(check.checked)}));
+      const text=document.createElement("span");text.className="task-text";text.textContent=task.text;
+      const del=document.createElement("button");del.className="delete";del.type="button";del.textContent="×";del.title="Delete task";del.setAttribute("aria-label",`Delete ${task.text}`);del.disabled=state.busy;
+      del.addEventListener("click",()=>mutate("delete",{id:task.id}));
+      li.append(check,text,del);tasksEl.append(li);
+    }
+    emptyEl.hidden=total!==0;
+    document.getElementById("count").textContent=`${total} task${total===1?"":"s"} · ${completed} completed`;
+    document.getElementById("progressText").textContent=`${percent}% complete`;
+    document.getElementById("progressFill").style.width=percent+"%";
+    document.getElementById("progressBar").setAttribute("aria-valuenow",String(percent));
+  }
+  async function loadTasks(showMessage=true){
+    try{
+      if(showMessage)setStatus("Loading tasks…");
+      const data=await api("list");
+      state.tasks=data.tasks||[];
+      render();setStatus("Synced with Google Sheets ✓");
+    }catch(e){setStatus(e.message,true);}
+  }
+  async function mutate(action,params={}){
+    if(state.busy)return;
+    state.busy=true;render();setStatus("Saving online…");
+    try{
+      await api(action,params);
+      await loadTasks(false);
+    }catch(e){setStatus(e.message,true);}
+    finally{state.busy=false;render();}
+  }
+  document.getElementById("taskForm").addEventListener("submit",async e=>{
+    e.preventDefault();const text=inputEl.value.trim();if(!text||state.busy)return;
+    state.busy=true;render();setStatus("Saving task online…");
+    try{await api("add",{text});inputEl.value="";await loadTasks(false);inputEl.focus();}
+    catch(err){setStatus(err.message,true);}
+    finally{state.busy=false;render();}
+  });
+  document.getElementById("refresh").addEventListener("click",()=>loadTasks());
+  document.getElementById("clearDone").addEventListener("click",async()=>{
+    if(state.tasks.some(t=>t.done)&&confirm("Delete all completed tasks for today?"))await mutate("clearDone");
+  });
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)loadTasks(false);});
+  window.addEventListener("focus",()=>loadTasks(false));
+  render();
+  loadTasks();
+</script>
+</body>
+</html>
